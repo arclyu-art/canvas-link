@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location("release_build",ROOT/"release.py")
@@ -23,7 +24,7 @@ class ReleaseTests(unittest.TestCase):
             root=Path(directory);path=root/"session.dpapi";path.write_bytes(b"encrypted")
             with self.assertRaises(ValueError):release.audit_file(path)
             path=root/"source.py";path.write_text(str(Path.home()),encoding="utf-8")
-            with self.assertRaises(ValueError):release.audit_file(path)
+            with patch.dict(release.os.environ,{"GITHUB_ACTIONS":""}),self.assertRaises(ValueError):release.audit_file(path)
 
 
 if __name__=="__main__":unittest.main()

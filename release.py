@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import types
+import ntpath
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
@@ -15,6 +16,11 @@ FORBIDDEN_NAMES = {"config.json", "session.json", "cookies.json", "snapshot.json
 
 def private_markers():
     home = str(Path.home())
+    # Hosted Windows Python DLLs can contain the public runneradmin build prefix.
+    # That agent identity is not a developer's private profile; own code paths
+    # are still required to be relative by audit_frozen_code below.
+    if os.environ.get("GITHUB_ACTIONS")=="true" and Path.home().name.lower() in {"runneradmin","runner","vssadministrator"}:
+        return []
     values = {home.lower(), home.replace("\\", "/").lower()}
     return [v.encode("utf-8") for v in values if len(v)>5]
 
@@ -30,7 +36,7 @@ def audit_file(path):
         while data := stream.read(1024*1024):
             sample = (previous + data).lower()
             if any(m in sample for m in markers):
-                raise ValueError("A build-machine home path was found in release bytes.")
+                raise ValueError("A private build-machine home path was found in release file: " + path.name)
             previous = sample[-2048:]
 
 
@@ -52,6 +58,8 @@ def audit_frozen_code(executable):
     def visit(code):
         if not isinstance(code,types.CodeType):return
         filename=code.co_filename.lower().replace("\\","/")
+        if ntpath.isabs(filename):
+            raise ValueError("Absolute source path embedded in bundled CanvasLink code.")
         if any(marker.decode().replace("\\","/") in filename for marker in private_markers()):
             raise ValueError("Build-machine path embedded in bundled Python code.")
         for item in code.co_consts:visit(item)
