@@ -72,10 +72,14 @@ def create_server():
 
 
 def run():
-    try:
-        create_server().run(transport="stdio")
-    finally:
-        # SDK text wrappers can close stdout on EOF; frozen Python flushes it again.
-        import sys, os
-        if sys.stdout is not None and sys.stdout.closed:
-            sys.stdout=open(os.devnull,"w",encoding="utf-8")
+    import sys
+    import anyio
+    from mcp.server.stdio import stdio_server
+    app=create_server()
+    sys.stdin.reconfigure(encoding="utf-8",errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8")
+    async def serve_stdio():
+        # Pass original streams: duplicate TextIOWrappers can close frozen stdout on EOF.
+        async with stdio_server(stdin=anyio.wrap_file(sys.stdin),stdout=anyio.wrap_file(sys.stdout)) as (read,write):
+            await app._mcp_server.run(read,write,app._mcp_server.create_initialization_options())
+    anyio.run(serve_stdio)
