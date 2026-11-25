@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canvaslink-local"
+version = "0.1.0"
+description = "User-owned local Canvas session bridge and MCP tools for Windows"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["playwright==1.60.0", "mcp==1.30.0"]
+
+[project.optional-dependencies]
+build = ["pyinstaller==6.22.3"]
+
+[project.scripts]
+canvaslink = "canvaslink.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
