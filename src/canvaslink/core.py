@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from .rate_limit import RateLimiter, RateLimited
 
 MAX_BODY = 2 * 1024 * 1024
 MAX_RESPONSE = 16 * 1024 * 1024
@@ -216,6 +217,8 @@ class Canvas:
             session = load_secret("session")
             if session.get("origin") != self.origin:
                 raise LoginRequired("NEEDS_LOGIN: saved session belongs to another Canvas address.")
+            if session.get("needs_login"):
+                raise LoginRequired("NEEDS_LOGIN: saved session was rejected; log in again.")
             self.jar = cookie_jar(session["cookies"])
             self.stamp = stamp
 
@@ -251,7 +254,7 @@ class Canvas:
         self.jar.add_cookie_header(req)
         headers = dict(req.header_items())
         headers.update({"Accept": "application/json" if path.startswith("/api/") else "*/*",
-                        "Accept-Encoding": "identity", "User-Agent": "CanvasLink/0.1"})
+                        "Accept-Encoding": "identity", "User-Agent": "CanvasLink/0.1.1"})
         payload = None
         if method != "GET":
             csrf = next((c.value for c in self.jar if c.name == "_csrf_token" and
@@ -268,7 +271,7 @@ class Canvas:
         if payload and len(payload) > MAX_BODY:
             raise ValueError("Request body exceeds 2 MiB.")
         started = time.perf_counter()
-        for attempt in range(2 if method == "GET" else 1):
+        with RateLimiter(self.origin, data_dir() / "request-limits") as budget:
             try:
                 if self.conn is None:
                     self.conn = http.client.HTTPSConnection(self.host, timeout=30)
@@ -279,11 +282,10 @@ class Canvas:
                 body = response.read(MAX_RESPONSE + 1)
                 if len(body) > MAX_RESPONSE:
                     raise ValueError("Response exceeds 16 MiB; request a smaller page.")
-                break
+                budget.observe(response.status, {"Retry-After": response.getheader("Retry-After")})
             except (OSError, http.client.HTTPException):
                 self.close()
-                if method != "GET" or attempt == 1:
-                    raise RuntimeError("Canvas network request failed. Do not retry a write until its outcome is checked.") from None
+                raise RuntimeError("Canvas network request failed. No automatic retry; check any write outcome first.") from None
             except Exception:
                 self.close()
                 raise
@@ -292,6 +294,10 @@ class Canvas:
         if previous != export_cookies(self.jar):
             save_secret("session", {"origin": self.origin, "cookies": export_cookies(self.jar)})
             self.stamp = (data_dir() / "session.dpapi").stat().st_mtime_ns
+        if response.status == 401:
+            save_secret("session", {"origin": self.origin, "cookies": [], "needs_login": True})
+            self.jar = http.cookiejar.CookieJar()
+            self.stamp = None
         content_type = response.getheader("Content-Type", "")
         out = {"status": response.status, "elapsed_ms": round((time.perf_counter() - started) * 1000),
                "content_type": content_type, "headers": {name: response.getheader(name) for name in
@@ -349,7 +355,7 @@ class Canvas:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "CanvasLink/0.1"
+    server_version = "CanvasLink/0.1.1"
     def log_message(self, *_):
         pass
     def setup(self):
@@ -386,6 +392,8 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= MAX_BODY: raise ValueError("Invalid body size.")
             result = self.server.canvas.request(json.loads(self.rfile.read(size)))
             self.reply(200, result)
+        except RateLimited as e:
+            self.reply(429, {"error": str(e), "retry_after": e.retry_after, "local_rate_limit": True})
         except LoginRequired:
             self.reply(409, {"needs_login": True, "error": "Open CanvasLink and log in."})
         except PermissionError as e:

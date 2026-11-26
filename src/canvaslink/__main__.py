@@ -3,7 +3,8 @@ import json
 import os
 import sys
 from . import __version__
-from .core import Canvas, data_dir, save_config, logout, serve, http_call, DEFAULT_PORT
+from .rate_limit import RateLimiter
+from .core import load_config, Canvas, data_dir, save_config, logout, serve, http_call, DEFAULT_PORT
 
 
 def mcp_config():
@@ -28,6 +29,10 @@ def main():
     sub.add_parser("login")
     sub.add_parser("logout")
     sub.add_parser("status")
+    limits = sub.add_parser("limits", help="View or adjust local request limits; no Canvas request")
+    limits.add_argument("--interval", type=int)
+    limits.add_argument("--hourly", type=int)
+    limits.add_argument("--daily", type=int)
     get = sub.add_parser("get"); get.add_argument("path")
     listing = sub.add_parser("list"); listing.add_argument("path")
     request = sub.add_parser("request"); request.add_argument("file", help="Local JSON request file")
@@ -58,6 +63,8 @@ def main():
             result = login(lambda message: print(message, file=sys.stderr, flush=True))
         elif args.command == "logout":
             logout(); result = {"logged_out_locally": True}
+        elif args.command == "limits":
+            result = RateLimiter(load_config()["origin"], data_dir()/"request-limits").configure(args.interval, args.hourly, args.daily)
         elif args.command == "status": result = Canvas().status()
         elif args.command == "get": result = Canvas().request({"path": args.path})
         elif args.command == "list": result = Canvas().list_all(args.path)

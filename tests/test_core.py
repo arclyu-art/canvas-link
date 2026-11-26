@@ -23,6 +23,43 @@ class CoreTests(unittest.TestCase):
         core.save_secret("session", {"origin": ORIGIN, "cookies": [
             {"name": "_csrf_token", "value": "fixture", "domain": "canvas.example.edu", "path": "/", "secure": True}]})
 
+    def test_429_blocks_later_requests_before_network(self):
+        from email.message import Message
+        self.configured()
+        c = core.Canvas(); c.reload()
+        response = Mock(status=429, will_close=False)
+        response.info.return_value = Message()
+        response.read.return_value = b'{}'
+        response.getheader.side_effect = lambda key, default=None: {"Content-Type": "application/json", "Retry-After": "3600"}.get(key, default)
+        c.conn = Mock()
+        c.conn.getresponse.return_value = response
+        self.assertEqual(c.request({"path": "/api/v1/courses"})["status"], 429)
+        with self.assertRaises(core.RateLimited): c.request({"path": "/api/v1/courses"})
+        self.assertEqual(c.conn.request.call_count, 1)
+
+    def test_401_rejects_old_session_but_allows_login_verification(self):
+        from email.message import Message
+        self.configured(); c = core.Canvas(); c.reload()
+        response = Mock(status=401, will_close=False)
+        response.info.return_value = Message(); response.read.return_value = b'{}'
+        response.getheader.side_effect = lambda key, default=None: {"Content-Type": "application/json"}.get(key, default)
+        c.conn = Mock(); c.conn.getresponse.return_value = response
+        self.assertEqual(c.request({"path": "/api/v1/courses"})["status"], 401)
+        with self.assertRaises(core.LoginRequired): c.request({"path": "/api/v1/courses"})
+        self.assertEqual(c.conn.request.call_count, 1)
+        state = json.loads(next((core.data_dir()/"request-limits").glob("*.json")).read_text())
+        self.assertEqual(state.get("blocked_until", 0), 0)
+        self.configured(); core.Canvas().reload()
+
+    def test_network_failure_is_not_retried(self):
+        self.configured()
+        c = core.Canvas(); c.reload(); connection = Mock()
+        connection.request.side_effect = OSError("fixture failure")
+        c.conn = connection
+        with self.assertRaises(RuntimeError): c.request({"path": "/api/v1/courses"})
+        self.assertEqual(connection.request.call_count, 1)
+        with self.assertRaises(core.RateLimited): c.request({"path": "/api/v1/courses"})
+
     def test_fresh_install_has_no_account(self):
         self.assertEqual(core.Canvas().status(), {"configured": False, "authenticated": False, "needs_setup": True})
         self.assertEqual(list(Path(self.temp.name).iterdir()), [])

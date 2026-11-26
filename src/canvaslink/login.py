@@ -3,6 +3,7 @@ import json
 import time
 import urllib.parse
 from .core import load_config, data_dir, load_secret, save_secret
+from .rate_limit import RateLimiter
 
 
 def login(notify=lambda message: None):
@@ -40,7 +41,9 @@ def login(notify=lambda message: None):
                     raise RuntimeError("Login window closed before Canvas identity was verified.")
                 if urllib.parse.urlsplit(page.url).hostname == host:
                     try:
-                        response = context.request.get(origin + "/api/v1/users/self/profile", timeout=10000, max_redirects=0)
+                        with RateLimiter(origin, data_dir() / "request-limits") as budget:
+                            response = context.request.get(origin + "/api/v1/users/self/profile", timeout=10000, max_redirects=0)
+                            budget.observe(response.status, response.headers)
                         if response.status == 200 and "json" in response.headers.get("content-type", ""):
                             profile = response.json()
                             if isinstance(profile, dict) and profile.get("id"):
@@ -52,7 +55,7 @@ def login(notify=lambda message: None):
                         pass
                     except json.JSONDecodeError:
                         pass
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(10000)
             raise RuntimeError("Login timed out after 30 minutes. No verified session was saved.")
         finally:
             browser.close()
