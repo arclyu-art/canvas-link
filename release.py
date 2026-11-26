@@ -9,7 +9,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 FILES = ("pyproject.toml", "requirements-windows.lock", "launcher.py", "build_windows.py",
-         "release.py", "README.md", "LICENSE", "PRIVACY.md", "SECURITY.md", ".gitignore",
+         "release.py", "README.md", "README.en.md", "LICENSE", "PRIVACY.md", "SECURITY.md", ".gitignore",
          ".github/workflows/windows.yml")
 FORBIDDEN_NAMES = {"config.json", "session.json", "cookies.json", "snapshot.json", "validation.json", ".env"}
 
@@ -82,7 +82,7 @@ def main():
             for path in sorted(app.rglob("*")):
                 if path.is_file():
                     audit_file(path);z.write(path,Path("CanvasLink")/path.relative_to(app))
-            for name in ("README.md","LICENSE","PRIVACY.md","SECURITY.md"):
+            for name in ("README.md","README.en.md","LICENSE","PRIVACY.md","SECURITY.md"):
                 z.write(ROOT/name,Path("CanvasLink")/name)
         outputs.append(windows)
     sums=[]

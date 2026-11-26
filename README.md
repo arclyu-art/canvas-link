@@ -1,5 +1,7 @@
 # CanvasLink
 
+**简体中文** | [English](README.en.md)
+
 **让 AI 在你的电脑上连接你自己的 Canvas。** Windows 本地工具，支持学校网页登录、SSO/MFA、本地 MCP 和可选的回环 HTTP 接口。
 
 没有共享账号，没有预置学校或课程，没有作者服务器。每个人下载后在自己电脑上配置和登录。
@@ -20,6 +22,10 @@
 Windows 10/11 x64，需要已安装 Microsoft Edge 或 Google Chrome。此包不需要用户另外安装 Python，不捆绑整套浏览器。初版未做数字签名。
 
 普通网页登录成功不等于本工具的独立浏览器已登录。会话过期时需要重新点登录；不会绕过学校的 MFA。
+
+## 工作方式
+
+CanvasLink 主要是复用用户登录会话的 Canvas API 客户端：向 `/api/v1` 发起请求并读取 JSON，也支持部分课程 HTML 和文件路径。它不是主要靠解析网页的传统爬虫，但仍属于第三方自动化访问；使用 API、登录 Cookie 或低频请求不等于获得学校和服务商的许可。
 
 ## AI 可以做什么
 
@@ -105,7 +111,7 @@ git init
 git add .
 git commit -m "Initial CanvasLink release"
 # 按 GitHub 新仓库页面设置 remote，再 push。
-# 正式发布版本时：git tag v0.1.0; git push origin v0.1.0
+# 正式发布时，将 vX.Y.Z 替换为未使用的版本号：git tag vX.Y.Z; git push origin vX.Y.Z
 ```
 
 发布前检查仓库没有自己的 config/session/snapshot。若曾误提交凭据，删除文件本身不够，必须撤销凭据并清理历史。
@@ -119,18 +125,27 @@ git commit -m "Initial CanvasLink release"
 - [Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
 - [Canvas API 分页](https://developerdocs.instructure.com/services/canvas/basics/file.pagination)
 
-## Conservative request limits
+## 请求频率与可调限流
 
-All application API requests, pagination and login identity checks share a persisted per-Windows-user, per-Canvas-origin budget: one in-flight request, by default at least 5 seconds between starts, at most 120 attempts per rolling hour and 400 per rolling day. State lives under `%LOCALAPPDATA%/CanvasLink/request-limits`; isolated test data directories use their own state. Requests from the legacy bridge share this default budget too. Restarting or changing login does not reset it. Do not delete limit files to bypass a cooldown.
+应用的 API 请求、分页和登录身份检查，共用按 Windows 用户、Canvas 站点持久化的额度：同一站点最多一个在途请求，默认间隔至少 **5 秒**，滚动一小时最多 **120 次**，滚动一天最多 **400 次**。状态保存在 `%LOCALAPPDATA%/CanvasLink/request-limits`；测试使用独立临时目录。旧版桥接也共享默认目录中的额度。重启或重新登录不会清零额度，请勿删除限流文件来绕过冷却。
 
-HTTP 429 triggers at least 30 minutes of cooldown, repeated throttling increases it, and a longer `Retry-After` (seconds or HTTP date) is respected. HTTP 503 starts at 5 minutes; 401 invalidates the saved Canvas session and requires a fresh login, without adding a cooldown; 403 is a permission denial, not throttling; transport failures pause for 60 seconds. No request is automatically retried. Budget/cooldown refusal returns `RATE_LIMITED` with a wait time; the optional local HTTP interface returns 429 with `local_rate_limit=true`. This is a local refusal, not an upstream Canvas response or an empty result. Long cooldowns do not sleep inside the process. Failed/corrupt budget state prevents requests.
+- **429**：至少冷却 30 分钟；连续触发会延长，并遵守服务器更长的 `Retry-After`（秒数或 HTTP 日期）。
+- **503**：冷却从 5 分钟开始。
+- **401**：标记保存的 Canvas 会话失效，需要重新登录，不增加冷却。
+- **403**：权限不足，不当作限流处理。
+- **网络传输错误**：暂停 60 秒，不自动重试请求。
 
-A nine-request scan now needs at least about 40 seconds plus network time. These limits cover requests made by the application, not browser page assets or unrelated clients. They reduce traffic; they do not constitute school/vendor approval for session or MCP access.
+额度或冷却拦截会返回 `RATE_LIMITED` 和等待时间；可选本地 HTTP 接口返回 429，附带 `local_rate_limit=true`。这是本地拒绝，不是 Canvas 的响应，也不是成功的空列表。长时间冷却不会让进程一直睡眠等待；限流状态损坏时会阻止请求。
 
-### Adjustable limits
+### 查看和修改设置
 
-Default: 5 seconds between request starts, 120/hour, 400/day. Settings are shared per Canvas origin, loaded on every request, and never clear request history or server cooldowns. One request remains in flight; 429/503 cooldowns cannot be disabled.
+```powershell
+.\CanvasLink.exe limits
+.\CanvasLink.exe limits --interval 5 --hourly 120 --daily 400
+```
 
-Windows CLI: `CanvasLink.exe limits` shows settings; `CanvasLink.exe limits --interval 5 --hourly 120 --daily 400` saves them. Bounds: interval 3..60 seconds, hourly 10..300, daily 10..1000; hourly must not exceed daily. No network request is made. The legacy CLI supports the same flags: `python bridge.py limits --interval 5 --hourly 120 --daily 400`.
+可调范围：请求间隔 **3–60 秒**，小时额度 **10–300 次**，日额度 **10–1000 次**；小时额度不能大于日额度。设置按 Canvas 站点共享，每次请求重新加载。修改设置不清除历史请求或服务器冷却，也不能关闭串行限制及 429/503 冷却。查看和修改设置不会发送 Canvas 请求。
 
-For slow custom intervals or long paginated reads, the AI client/local HTTP caller may need a longer request timeout. The recommended 5-second default avoids a single pacing wait near the usual 60-second client timeout.
+旧版命令行支持相同参数：`python bridge.py limits --interval 5 --hourly 120 --daily 400`。
+
+按默认间隔，9 次请求的起始时间跨度至少约 40 秒，还需考虑网络耗时。这些限制只覆盖应用发出的请求，不覆盖浏览器页面资源或其他客户端。较长的自定义间隔、多页读取可能需要延长 AI 客户端或本地 HTTP 调用方的超时。建议先保持默认 5 秒间隔。
